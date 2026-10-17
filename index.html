@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e14">
+<title>Frozen In Flames Channel Strip</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="flame" aria-hidden="true">&#128293;</span>
+    <div>
+      <h1>Frozen In Flames Channel Strip</h1>
+      <p class="tagline">A virtual recording channel for your iPhone. No hardware required.</p>
+    </div>
+  </div>
+</header>
+
+<!-- Start overlay: iOS needs a user gesture to start audio -->
+<div id="startOverlay" class="overlay">
+  <div class="overlay-card">
+    <h2>Ready to record</h2>
+    <p>Tap below to start the audio engine. Your browser will ask for microphone permission.</p>
+    <button id="startBtn" class="big-btn">Tap to Start</button>
+    <p class="fine">Works with the built-in mic or an uploaded audio file. Everything runs on your device.</p>
+  </div>
+</div>
+
+<main id="app" class="hidden">
+  <!-- Source -->
+  <section class="card">
+    <h2>Source</h2>
+    <div class="row">
+      <button id="srcMic" class="seg active">Live Mic</button>
+      <button id="srcFile" class="seg">Audio File</button>
+      <label class="seg file-label" id="fileLabel">Choose file
+        <input type="file" id="fileInput" accept="audio/*" hidden>
+      </label>
+    </div>
+    <p id="srcStatus" class="status">Mic live. Speak or play into your iPhone.</p>
+    <label class="check"><input type="checkbox" id="fileLoop"> Loop uploaded file</label>
+  </section>
+
+  <!-- Meters -->
+  <section class="card">
+    <h2>Meters</h2>
+    <div class="meter-block">
+      <span class="meter-label">In</span>
+      <div class="meter"><div id="meterIn" class="meter-fill in"></div></div>
+      <span id="dbIn" class="db">-inf dB</span>
+    </div>
+    <div class="meter-block">
+      <span class="meter-label">GR</span>
+      <div class="meter"><div id="meterGR" class="meter-fill gr"></div></div>
+      <span id="dbGR" class="db">0.0 dB</span>
+    </div>
+    <div class="meter-block">
+      <span class="meter-label">Out</span>
+      <div class="meter"><div id="meterOut" class="meter-fill out"></div></div>
+      <span id="dbOut" class="db">-inf dB</span>
+    </div>
+  </section>
+
+  <!-- Presets -->
+  <section class="card">
+    <h2>Presets</h2>
+    <div class="row">
+      <button class="preset" data-preset="clean">Clean</button>
+      <button class="preset" data-preset="vocal">Vocal Punch</button>
+      <button class="preset" data-preset="tape">Warm Tape</button>
+    </div>
+  </section>
+
+  <!-- Input -->
+  <section class="card" data-stage="input">
+    <div class="card-head"><h2>Input</h2><button class="bypass" data-bypass="input">Bypass</button></div>
+    <label class="ctl"><span>Gain <b id="vInGain">0.0 dB</b></span>
+      <input type="range" id="inGain" min="-24" max="24" step="0.5" value="0"></label>
+  </section>
+
+  <!-- EQ -->
+  <section class="card" data-stage="eq">
+    <div class="card-head"><h2>EQ</h2><button class="bypass" data-bypass="eq">Bypass</button></div>
+    <h3>Low shelf</h3>
+    <label class="ctl"><span>Freq <b id="vEqLowF">120 Hz</b></span>
+      <input type="range" id="eqLowF" min="40" max="500" step="1" value="120"></label>
+    <label class="ctl"><span>Gain <b id="vEqLowG">0.0 dB</b></span>
+      <input type="range" id="eqLowG" min="-12" max="12" step="0.5" value="0"></label>
+    <h3>Mid 1 (peak)</h3>
+    <label class="ctl"><span>Freq <b id="vEqM1F">800 Hz</b></span>
+      <input type="range" id="eqM1F" min="200" max="2000" step="1" value="800"></label>
+    <label class="ctl"><span>Gain <b id="vEqM1G">0.0 dB</b></span>
+      <input type="range" id="eqM1G" min="-12" max="12" step="0.5" value="0"></label>
+    <label class="ctl"><span>Q <b id="vEqM1Q">1.0</b></span>
+      <input type="range" id="eqM1Q" min="0.3" max="4" step="0.1" value="1"></label>
+    <h3>Mid 2 (peak)</h3>
+    <label class="ctl"><span>Freq <b id="vEqM2F">3.0 kHz</b></span>
+      <input type="range" id="eqM2F" min="1000" max="8000" step="10" value="3000"></label>
+    <label class="ctl"><span>Gain <b id="vEqM2G">0.0 dB</b></span>
+      <input type="range" id="eqM2G" min="-12" max="12" step="0.5" value="0"></label>
+    <label class="ctl"><span>Q <b id="vEqM2Q">1.0</b></span>
+      <input type="range" id="eqM2Q" min="0.3" max="4" step="0.1" value="1"></label>
+    <h3>High shelf</h3>
+    <label class="ctl"><span>Freq <b id="vEqHF">8.0 kHz</b></span>
+      <input type="range" id="eqHF" min="4000" max="16000" step="50" value="8000"></label>
+    <label class="ctl"><span>Gain <b id="vEqHG">0.0 dB</b></span>
+      <input type="range" id="eqHG" min="-12" max="12" step="0.5" value="0"></label>
+  </section>
+
+  <!-- Compressor -->
+  <section class="card" data-stage="comp">
+    <div class="card-head"><h2>Compressor</h2><button class="bypass" data-bypass="comp">Bypass</button></div>
+    <label class="ctl"><span>Threshold <b id="vCompT">-18 dB</b></span>
+      <input type="range" id="compT" min="-48" max="0" step="1" value="-18"></label>
+    <label class="ctl"><span>Ratio <b id="vCompR">2 : 1</b></span>
+      <input type="range" id="compR" min="1" max="20" step="0.5" value="2"></label>
+    <label class="ctl"><span>Attack <b id="vCompA">10 ms</b></span>
+      <input type="range" id="compA" min="1" max="100" step="1" value="10"></label>
+    <label class="ctl"><span>Release <b id="vCompRel">200 ms</b></span>
+      <input type="range" id="compRel" min="20" max="1000" step="10" value="200"></label>
+  </section>
+
+  <!-- Saturation -->
+  <section class="card" data-stage="sat">
+    <div class="card-head"><h2>Saturation</h2><button class="bypass active" data-bypass="sat">Bypassed</button></div>
+    <label class="ctl"><span>Drive <b id="vSatD">50%</b></span>
+      <input type="range" id="satD" min="0" max="100" step="1" value="50"></label>
+  </section>
+
+  <!-- Limiter -->
+  <section class="card" data-stage="limit">
+    <div class="card-head"><h2>Limiter</h2><button class="bypass" data-bypass="limit">Bypass</button></div>
+    <label class="ctl"><span>Ceiling <b id="vLimC">-1.0 dB</b></span>
+      <input type="range" id="limC" min="-12" max="0" step="0.5" value="-1"></label>
+  </section>
+
+  <!-- Output -->
+  <section class="card" data-stage="output">
+    <div class="card-head"><h2>Output</h2><button class="bypass" data-bypass="output">Bypass</button></div>
+    <label class="ctl"><span>Gain <b id="vOutGain">0.0 dB</b></span>
+      <input type="range" id="outGain" min="-24" max="24" step="0.5" value="0"></label>
+  </section>
+
+  <!-- Recorder -->
+  <section class="card">
+    <h2>Recorder</h2>
+    <div class="row">
+      <button id="recBtn" class="big-btn rec">Record</button>
+      <button id="stopBtn" class="big-btn" disabled>Stop</button>
+    </div>
+    <p id="recStatus" class="status">Records the processed output as a 16-bit WAV on this device.</p>
+    <a id="dlLink" class="hidden dl" download="fif-channel-strip.wav">Download recording</a>
+  </section>
+
+  <footer>
+    <p>Frozen In Flames Channel Strip. Not affiliated with or endorsed by Focusrite. All processing happens in your browser on your device.</p>
+  </footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
