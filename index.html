@@ -43,6 +43,45 @@
     <label class="check"><input type="checkbox" id="fileLoop"> Loop uploaded file</label>
   </section>
 
+  <!-- Analyze: understand the input before treating it -->
+  <section class="card">
+    <h2>Analyze</h2>
+    <canvas id="specCanvas" width="520" height="140" class="spec"></canvas>
+    <div class="row diag-row">
+      <span>Noise floor <b id="noiseFloor">--</b></span>
+      <span>Clip <button id="clipLed" class="led" title="Tap to clear">OK</button></span>
+      <span>DC <b id="dcLed" class="led">OK</b></span>
+    </div>
+    <div class="row">
+      <button id="noisePrintBtn" class="seg">Capture noise print (1.5s)</button>
+    </div>
+    <p id="noisePrintStatus" class="status">Stay quiet for 1.5 seconds while it learns your room tone. The print sets the gate suggestion.</p>
+  </section>
+
+  <!-- Gate: first treatment in the chain -->
+  <section class="card" data-stage="gate">
+    <div class="card-head"><h2>Gate</h2><button class="bypass" data-bypass="gate">Bypass</button></div>
+    <p class="desc">Silences the chain when the room is quieter than the threshold. The noise print suggests the right setting.</p>
+    <label class="ctl"><span>Threshold <b id="vGateT">-40 dB</b></span>
+      <input type="range" id="gateT" min="-60" max="0" step="1" value="-40"></label>
+    <p id="gateSuggest" class="status">No noise print yet. Capture one above for a suggested threshold.</p>
+  </section>
+
+  <!-- Feedback Killer -->
+  <section class="card" data-stage="feedback">
+    <div class="card-head"><h2>Feedback Killer</h2><button class="bypass" data-bypass="feedback">Bypass</button></div>
+    <p class="desc">Finds sustained ringing frequencies in the live input and notches them out.</p>
+    <div class="row">
+      <button id="huntBtn" class="seg">Hunt ringing</button>
+      <button id="notchClear" class="seg">Clear notches</button>
+    </div>
+    <label class="ctl"><span>Manual notch <b id="vNotchF">1.0 kHz</b></span>
+      <input type="range" id="notchF" min="50" max="8000" step="10" value="1000"></label>
+    <div class="row"><button id="notchAdd" class="seg">Add notch</button></div>
+    <p id="huntStatus" class="status">No notches active.</p>
+    <div id="notchList" class="notch-list"></div>
+  </section>
+
   <!-- Meters -->
   <section class="card">
     <h2>Meters</h2>
@@ -132,6 +171,7 @@
   <!-- Limiter -->
   <section class="card" data-stage="limit">
     <div class="card-head"><h2>Limiter</h2><button class="bypass" data-bypass="limit">Bypass</button></div>
+    <p class="desc">Tames the harsh transient peaks cheap mics exaggerate. Sets the final ceiling.</p>
     <label class="ctl"><span>Ceiling <b id="vLimC">-1.0 dB</b></span>
       <input type="range" id="limC" min="-12" max="0" step="0.5" value="-1"></label>
   </section>

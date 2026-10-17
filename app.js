@@ -18,7 +18,15 @@
   var chunks = [];
   var recording = false;
 
-  var bypass = { input: false, eq: false, comp: false, sat: true, limit: false, output: false };
+  var bypass = { input: false, gate: false, feedback: false, eq: false, comp: false, sat: true, limit: false, output: false };
+
+  // Analysis + treatment state
+  var notchList = [];       // {freq, node, auto}
+  var noiseProfile = null;  // Float32Array of per-bin dB, averaged
+  var floorEnv = -80;       // slow noise-floor estimate, dB
+  var clipLatched = false;
+  var gateEnv = 1;
+  var gateThresholdDb = -40;
 
   /* ---------- graph ---------- */
 
@@ -26,6 +34,8 @@
     var n = nodes;
     n.inputGain = ctx.createGain();
     n.inAn = ctx.createAnalyser(); n.inAn.fftSize = 2048;
+    n.specAn = ctx.createAnalyser(); n.specAn.fftSize = 4096; n.specAn.smoothingTimeConstant = 0.7;
+    n.gateGain = ctx.createGain();
     n.eqLow = ctx.createBiquadFilter(); n.eqLow.type = "lowshelf";
     n.eqMid1 = ctx.createBiquadFilter(); n.eqMid1.type = "peaking";
     n.eqMid2 = ctx.createBiquadFilter(); n.eqMid2.type = "peaking";
@@ -49,7 +59,9 @@
   function stageSeq() {
     var seq = [];
     if (!bypass.input) seq.push(nodes.inputGain);
-    seq.push(nodes.inAn);
+    seq.push(nodes.inAn, nodes.specAn);
+    if (!bypass.gate) seq.push(nodes.gateGain);
+    if (!bypass.feedback) notchList.forEach(function (w) { seq.push(w.node); });
     if (!bypass.eq) seq.push(nodes.eqLow, nodes.eqMid1, nodes.eqMid2, nodes.eqHigh);
     if (!bypass.comp) seq.push(nodes.comp);
     if (!bypass.sat) seq.push(nodes.sat);
@@ -61,8 +73,10 @@
 
   function rebuildChain() {
     if (!ctx || !srcNode) return;
-    var all = [nodes.inputGain, nodes.inAn, nodes.eqLow, nodes.eqMid1, nodes.eqMid2,
-               nodes.eqHigh, nodes.comp, nodes.sat, nodes.limiter, nodes.outputGain, nodes.outAn];
+    var all = [nodes.inputGain, nodes.inAn, nodes.specAn, nodes.gateGain,
+               nodes.eqLow, nodes.eqMid1, nodes.eqMid2, nodes.eqHigh,
+               nodes.comp, nodes.sat, nodes.limiter, nodes.outputGain, nodes.outAn];
+    notchList.forEach(function (w) { all.push(w.node); });
     try { srcNode.disconnect(); } catch (e) {}
     all.forEach(function (nd) { try { nd.disconnect(); } catch (e) {} });
     var prev = srcNode;
@@ -131,6 +145,7 @@
 
   function bindAll() {
     bindRange("inGain", "vInGain", fmtDb, function (v) { nodes.inputGain.gain.value = dbToGain(v); });
+    bindRange("gateT", "vGateT", fmtDb, function (v) { gateThresholdDb = v; });
     bindRange("eqLowF", "vEqLowF", fmtHz, function (v) { nodes.eqLow.frequency.value = v; });
     bindRange("eqLowG", "vEqLowG", fmtDb, function (v) { nodes.eqLow.gain.value = v; });
     bindRange("eqM1F", "vEqM1F", fmtHz, function (v) { nodes.eqMid1.frequency.value = v; });
@@ -152,23 +167,23 @@
 
   /* ---------- presets ---------- */
 
-  var SLIDERS = ["inGain", "eqLowF", "eqLowG", "eqM1F", "eqM1G", "eqM1Q",
+  var SLIDERS = ["inGain", "gateT", "eqLowF", "eqLowG", "eqM1F", "eqM1G", "eqM1Q",
                  "eqM2F", "eqM2G", "eqM2Q", "eqHF", "eqHG",
                  "compT", "compR", "compA", "compRel", "satD", "limC", "outGain"];
 
   var PRESETS = {
-    clean: { inGain: 0, eqLowF: 120, eqLowG: 0, eqM1F: 800, eqM1G: 0, eqM1Q: 1,
+    clean: { inGain: 0, gateT: -40, eqLowF: 120, eqLowG: 0, eqM1F: 800, eqM1G: 0, eqM1Q: 1,
              eqM2F: 3000, eqM2G: 0, eqM2Q: 1, eqHF: 8000, eqHG: 0,
              compT: -18, compR: 2, compA: 10, compRel: 200, satD: 50, limC: -1, outGain: 0,
-             bypass: { input: false, eq: false, comp: false, sat: true, limit: false, output: false } },
-    vocal: { inGain: 3, eqLowF: 100, eqLowG: -2, eqM1F: 500, eqM1G: -1, eqM1Q: 1,
+             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: true, limit: false, output: false } },
+    vocal: { inGain: 3, gateT: -45, eqLowF: 100, eqLowG: -2, eqM1F: 500, eqM1G: -1, eqM1Q: 1,
              eqM2F: 3000, eqM2G: 4, eqM2Q: 1.2, eqHF: 9000, eqHG: 1,
              compT: -20, compR: 4, compA: 3, compRel: 150, satD: 25, limC: -1, outGain: 1,
-             bypass: { input: false, eq: false, comp: false, sat: false, limit: false, output: false } },
-    tape:  { inGain: 2, eqLowF: 120, eqLowG: 3, eqM1F: 400, eqM1G: 1, eqM1Q: 0.8,
+             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: false, limit: false, output: false } },
+    tape:  { inGain: 2, gateT: -40, eqLowF: 120, eqLowG: 3, eqM1F: 400, eqM1G: 1, eqM1Q: 0.8,
              eqM2F: 2500, eqM2G: -1, eqM2Q: 1, eqHF: 8000, eqHG: -3,
              compT: -14, compR: 2.5, compA: 15, compRel: 300, satD: 65, limC: -1.5, outGain: 0,
-             bypass: { input: false, eq: false, comp: false, sat: false, limit: false, output: false } }
+             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: false, limit: false, output: false } }
   };
 
   function refreshBypassButtons() {
@@ -196,7 +211,7 @@
     });
   }
 
-  /* ---------- meters ---------- */
+  /* ---------- meters + input analysis ---------- */
 
   var meterBuf = new Float32Array(2048);
   function peakDb(an) {
@@ -208,23 +223,233 @@
     }
     return peak <= 0.00001 ? -Infinity : 20 * Math.log10(peak);
   }
+  // peak + rms + dc mean of the input, for clip / floor / dc diagnosis
+  function analyzeInput() {
+    nodes.inAn.getFloatTimeDomainData(meterBuf);
+    var peak = 0, sum = 0, sumSq = 0, n = meterBuf.length;
+    for (var i = 0; i < n; i++) {
+      var s = meterBuf[i], a = Math.abs(s);
+      if (a > peak) peak = a;
+      sum += s; sumSq += s * s;
+    }
+    return { peak: peak, rms: Math.sqrt(sumSq / n), dc: sum / n };
+  }
   function dbToWidth(db) {
     if (!isFinite(db)) return 0;
     return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
   }
   function dbText(db) { return isFinite(db) ? db.toFixed(1) + " dB" : "-inf dB"; }
 
+  var specByte = null;
+  function drawSpectrum() {
+    var cv = $("specCanvas");
+    if (!cv) return;
+    var g = cv.getContext("2d");
+    var W = cv.width, H = cv.height;
+    if (!specByte || specByte.length !== nodes.specAn.frequencyBinCount) {
+      specByte = new Uint8Array(nodes.specAn.frequencyBinCount);
+    }
+    nodes.specAn.getByteFrequencyData(specByte);
+    var binHz = ctx.sampleRate / nodes.specAn.fftSize;
+    var minF = 20, maxF = 20000;
+    g.clearRect(0, 0, W, H);
+    for (var x = 0; x < W; x++) {
+      var f = minF * Math.pow(maxF / minF, x / W);
+      var bin = Math.min(Math.floor(f / binHz), specByte.length - 1);
+      var h = (specByte[bin] / 255) * H;
+      g.fillStyle = "#59d6ff";
+      g.fillRect(x, H - h, 1, h);
+    }
+    if (noiseProfile) {
+      g.strokeStyle = "#ff9a3c"; g.lineWidth = 2; g.beginPath();
+      for (var x2 = 0; x2 < W; x2 += 2) {
+        var f2 = minF * Math.pow(maxF / minF, x2 / W);
+        var bin2 = Math.min(Math.floor(f2 / binHz), noiseProfile.length - 1);
+        var db = Math.max(-100, noiseProfile[bin2]);
+        var y = H - ((db + 100) / 100) * H;
+        if (x2 === 0) g.moveTo(x2, y); else g.lineTo(x2, y);
+      }
+      g.stroke();
+    }
+  }
+
   function meterLoop() {
-    var dIn = peakDb(nodes.inAn);
+    var inp = analyzeInput();
+    var dIn = inp.peak <= 0.00001 ? -Infinity : 20 * Math.log10(inp.peak);
     var dOut = peakDb(nodes.outAn);
     var gr = (typeof nodes.comp.reduction === "number") ? -nodes.comp.reduction : 0;
+
+    // gate envelope: fast open, slow close
+    var thr = dbToGain(gateThresholdDb);
+    var target = inp.rms > thr ? 1 : 0;
+    var dt = 1 / 60;
+    var coef = target > gateEnv ? 1 - Math.exp(-dt / 0.005) : 1 - Math.exp(-dt / 0.15);
+    gateEnv += (target - gateEnv) * coef;
+    nodes.gateGain.gain.value = bypass.gate ? 1 : gateEnv;
+
+    // noise floor: slow average of rms
+    var rmsDb = inp.rms <= 0.00001 ? -90 : 20 * Math.log10(inp.rms);
+    floorEnv += (rmsDb - floorEnv) * 0.03;
+    $("noiseFloor").textContent = floorEnv.toFixed(1) + " dB";
+
+    // clip latch + dc indicator
+    if (inp.peak >= 0.999) clipLatched = true;
+    var led = $("clipLed");
+    led.textContent = clipLatched ? "CLIP" : "OK";
+    led.classList.toggle("hot", clipLatched);
+    var dcBad = Math.abs(inp.dc) > 0.02;
+    var dcEl = $("dcLed");
+    dcEl.textContent = dcBad ? "DC!" : "OK";
+    dcEl.classList.toggle("hot", dcBad);
+
     $("meterIn").style.width = dbToWidth(dIn) + "%";
     $("meterOut").style.width = dbToWidth(dOut) + "%";
     $("meterGR").style.width = Math.max(0, Math.min(100, (gr / 24) * 100)) + "%";
     $("dbIn").textContent = dbText(dIn);
     $("dbOut").textContent = dbText(dOut);
     $("dbGR").textContent = gr.toFixed(1) + " dB";
+    drawSpectrum();
     requestAnimationFrame(meterLoop);
+  }
+
+  /* ---------- noise print: learn the room, suggest the gate ---------- */
+
+  function captureNoisePrint() {
+    var btn = $("noisePrintBtn");
+    btn.disabled = true;
+    $("noisePrintStatus").textContent = "Listening... stay quiet. Learning your room tone.";
+    var frames = [], need = 30; // 30 x 50ms = 1.5s
+    var bins = nodes.specAn.frequencyBinCount;
+    var tmp = new Float32Array(bins);
+    var timer = setInterval(function () {
+      nodes.specAn.getFloatFrequencyData(tmp);
+      var copy = new Float32Array(bins);
+      for (var i = 0; i < bins; i++) copy[i] = tmp[i] < -120 ? -120 : tmp[i];
+      frames.push(copy);
+      if (frames.length >= need) {
+        clearInterval(timer);
+        finishNoisePrint(frames);
+        btn.disabled = false;
+      }
+    }, 50);
+  }
+
+  function finishNoisePrint(frames) {
+    var bins = frames[0].length, f, i;
+    var avg = new Float32Array(bins);
+    for (i = 0; i < bins; i++) {
+      var sum = 0;
+      for (f = 0; f < frames.length; f++) sum += Math.pow(10, frames[f][i] / 10);
+      avg[i] = 10 * Math.log10(sum / frames.length);
+    }
+    noiseProfile = avg;
+    var sorted = Array.prototype.slice.call(avg).sort(function (a, b) { return a - b; });
+    noiseFloorDb = sorted[Math.floor(sorted.length / 2)];
+    var suggested = Math.max(-60, Math.min(0, Math.round(noiseFloorDb + 6)));
+    var el = $("gateT");
+    el.value = suggested;
+    el.dispatchEvent(new Event("input"));
+    $("gateSuggest").textContent =
+      "Suggested from your noise print: " + suggested + " dB (floor " + noiseFloorDb.toFixed(1) + " dB).";
+    $("noisePrintStatus").textContent =
+      "Noise print captured. Orange line on the spectrum is your room. Gate threshold set to " + suggested + " dB.";
+  }
+
+  /* ---------- feedback killer: hunt and notch sustained ringing ---------- */
+
+  function addNotch(freq, auto) {
+    if (notchList.length >= 8) return;
+    for (var i = 0; i < notchList.length; i++) {
+      if (Math.abs(notchList[i].freq - freq) / freq < 0.05) return; // already covered
+    }
+    var f = ctx.createBiquadFilter();
+    f.type = "notch"; f.frequency.value = freq; f.Q.value = 12;
+    notchList.push({ freq: freq, node: f, auto: !!auto });
+    rebuildChain();
+    renderNotches();
+  }
+
+  function removeNotch(i) {
+    var w = notchList[i];
+    try { w.node.disconnect(); } catch (e) {}
+    notchList.splice(i, 1);
+    rebuildChain();
+    renderNotches();
+  }
+
+  function clearNotches() {
+    notchList.forEach(function (w) { try { w.node.disconnect(); } catch (e) {} });
+    notchList.length = 0;
+    rebuildChain();
+    renderNotches();
+  }
+
+  function renderNotches() {
+    var box = $("notchList");
+    box.innerHTML = "";
+    if (notchList.length === 0) {
+      $("huntStatus").textContent = "No notches active.";
+      return;
+    }
+    $("huntStatus").textContent = notchList.length + " notch" +
+      (notchList.length > 1 ? "es" : "") + " active.";
+    notchList.forEach(function (w, i) {
+      var chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = (w.freq >= 1000 ? (w.freq / 1000).toFixed(1) + " kHz" : Math.round(w.freq) + " Hz") + " ";
+      var x = document.createElement("button");
+      x.textContent = "x"; x.className = "chip-x"; x.setAttribute("aria-label", "remove notch");
+      x.addEventListener("click", function () { removeNotch(i); });
+      chip.appendChild(x);
+      box.appendChild(chip);
+    });
+  }
+
+  function huntFeedback() {
+    var btn = $("huntBtn");
+    btn.disabled = true;
+    $("huntStatus").textContent = "Hunting... let the ringing sustain for a second.";
+    var snaps = [], bins = nodes.specAn.frequencyBinCount;
+    function snap(i) {
+      var d = new Float32Array(bins);
+      nodes.specAn.getFloatFrequencyData(d);
+      snaps.push(d);
+      if (i < 2) { setTimeout(function () { snap(i + 1); }, 350); }
+      else { finishHunt(snaps); btn.disabled = false; }
+    }
+    snap(0);
+  }
+
+  function finishHunt(snaps) {
+    var bins = snaps[0].length;
+    var binHz = ctx.sampleRate / nodes.specAn.fftSize;
+    var cands = [], i, j;
+    for (i = 4; i < bins - 4; i++) {
+      var v0 = snaps[0][i] < -120 ? -120 : snaps[0][i];
+      var v1 = snaps[1][i] < -120 ? -120 : snaps[1][i];
+      var v2 = snaps[2][i] < -120 ? -120 : snaps[2][i];
+      var sustained = Math.min(v0, v1, v2);
+      if (sustained < -50) continue; // too quiet to matter
+      var peak = true; // narrow local maximum with contrast
+      for (j = 1; j <= 4; j++) {
+        var a = snaps[0][i - j] < -120 ? -120 : snaps[0][i - j];
+        var b = snaps[0][i + j] < -120 ? -120 : snaps[0][i + j];
+        if (a > v0 - 6 || b > v0 - 6) { peak = false; break; }
+      }
+      if (!peak) continue;
+      cands.push({ bin: i, mag: sustained });
+    }
+    cands.sort(function (a, b) { return b.mag - a.mag; });
+    var picked = [];
+    cands.forEach(function (c) {
+      if (picked.length >= 6) return;
+      if (picked.every(function (p) { return Math.abs(p.bin - c.bin) > 10; })) picked.push(c);
+    });
+    if (picked.length === 0) {
+      $("huntStatus").textContent = "No sustained ringing found. The room is clean, or the tone moved.";
+      return;
+    }
+    picked.forEach(function (c) { addNotch(c.bin * binHz, true); });
   }
 
   /* ---------- recording + WAV ---------- */
@@ -308,6 +533,17 @@
     });
     $("recBtn").addEventListener("click", startRecording);
     $("stopBtn").addEventListener("click", stopRecording);
+    $("clipLed").addEventListener("click", function () { clipLatched = false; });
+    $("noisePrintBtn").addEventListener("click", captureNoisePrint);
+    $("huntBtn").addEventListener("click", huntFeedback);
+    $("notchAdd").addEventListener("click", function () {
+      addNotch(parseFloat($("notchF").value), false);
+    });
+    $("notchClear").addEventListener("click", clearNotches);
+    $("notchF").addEventListener("input", function () {
+      $("vNotchF").textContent = fmtHz(parseFloat($("notchF").value));
+    });
+    renderNotches();
     refreshBypassButtons();
   }
 

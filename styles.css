@@ -71,6 +71,26 @@ input[type="range"] { width: 100%; accent-color: var(--ice); height: 28px; }
 .meter-fill.gr { background: linear-gradient(90deg, var(--grn), #b7f34a); }
 .db { width: 64px; text-align: right; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 
+.spec { width: 100%; height: 140px; background: #0a0d13; border: 1px solid var(--line); border-radius: 8px; }
+.desc { color: var(--dim); font-size: 13px; margin: 6px 0 4px; }
+.diag-row { justify-content: space-between; margin: 8px 0; font-size: 13px; color: var(--dim); }
+.diag-row b { color: var(--text); }
+.led {
+  background: #1b2334; color: var(--grn); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.led.hot { color: #0b0e14; background: var(--red); border-color: var(--red); }
+.notch-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #1b2334; border: 1px solid var(--fire); color: var(--fire);
+  border-radius: 16px; padding: 4px 6px 4px 12px; font-size: 12px;
+}
+.chip-x {
+  background: transparent; border: 1px solid var(--fire); color: var(--fire);
+  border-radius: 50%; width: 20px; height: 20px; font-size: 12px; line-height: 1; cursor: pointer;
+}
+
 .big-btn {
   background: linear-gradient(135deg, #1f6feb, #59d6ff);
   color: #06121f; border: none; border-radius: 12px;
