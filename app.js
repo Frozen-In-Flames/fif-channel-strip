@@ -1,96 +1,60 @@
-/* Frozen In Flames Channel Strip - vanilla Web Audio, no dependencies. */
+/* Frozen In Flames Channel Strip: the app shell.
+ *
+ * Product-line architecture: the shell owns the AudioContext, the source
+ * (mic / file), the recorder + WAV export, the meters, and the startup
+ * suite picker. All DSP lives in suites registered through FIFSuites
+ * (see suites.js). Adding a chain = registering a suite; the shell is untouched.
+ */
 (function () {
   "use strict";
 
   function $(id) { return document.getElementById(id); }
-
   var dbToGain = function (db) { return Math.pow(10, db / 20); };
   var fmtDb = function (v) { return v.toFixed(1) + " dB"; };
   var fmtHz = function (v) {
     return v >= 1000 ? (v / 1000).toFixed(1) + " kHz" : Math.round(v) + " Hz";
   };
+  function dbToWidth(db) {
+    if (!isFinite(db)) return 0;
+    return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+  }
+  function dbText(db) { return isFinite(db) ? db.toFixed(1) + " dB" : "-inf dB"; }
 
   var ctx = null;
-  var nodes = {};
   var srcNode = null;
   var micStream = null;
   var fileBuffer = null;
+  var recTap = null;
+  var recorderNode = null;
   var chunks = [];
   var recording = false;
 
-  var bypass = { input: false, gate: false, feedback: false, eq: false, comp: false, sat: true, limit: false, output: false };
+  var suiteDef = null;
+  var inst = null;
+  var pickedSuiteId = null;
 
-  // Analysis + treatment state
-  var notchList = [];       // {freq, node, auto}
-  var noiseProfile = null;  // Float32Array of per-bin dB, averaged
-  var floorEnv = -80;       // slow noise-floor estimate, dB
-  var clipLatched = false;
-  var gateEnv = 1;
-  var gateThresholdDb = -40;
+  var shell = {
+    ctx: null,
+    $: $,
+    dbToGain: dbToGain,
+    fmtDb: fmtDb,
+    fmtHz: fmtHz,
+    rebuild: rebuild,
+    srcNode: function () { return srcNode; }
+  };
 
-  /* ---------- graph ---------- */
-
-  function makeNodes() {
-    var n = nodes;
-    n.inputGain = ctx.createGain();
-    n.inAn = ctx.createAnalyser(); n.inAn.fftSize = 2048;
-    n.specAn = ctx.createAnalyser(); n.specAn.fftSize = 4096; n.specAn.smoothingTimeConstant = 0.7;
-    n.gateGain = ctx.createGain();
-    n.eqLow = ctx.createBiquadFilter(); n.eqLow.type = "lowshelf";
-    n.eqMid1 = ctx.createBiquadFilter(); n.eqMid1.type = "peaking";
-    n.eqMid2 = ctx.createBiquadFilter(); n.eqMid2.type = "peaking";
-    n.eqHigh = ctx.createBiquadFilter(); n.eqHigh.type = "highshelf";
-    n.comp = ctx.createDynamicsCompressor();
-    n.sat = ctx.createWaveShaper(); n.sat.oversample = "4x";
-    n.limiter = ctx.createDynamicsCompressor();
-    n.limiter.knee.value = 0; n.limiter.ratio.value = 20;
-    n.limiter.attack.value = 0.002; n.limiter.release.value = 0.05;
-    n.outputGain = ctx.createGain();
-    n.outAn = ctx.createAnalyser(); n.outAn.fftSize = 2048;
-    n.recorder = new AudioWorkletNode(ctx, "fif-recorder");
-    n.recorder.port.onmessage = function (e) {
-      if (e.data && e.data.samples) chunks.push(new Float32Array(e.data.samples));
-    };
-    n.mute = ctx.createGain(); n.mute.gain.value = 0;
-    n.recorder.connect(n.mute);
-    n.mute.connect(ctx.destination);
+  function rebuild() {
+    if (!inst || !ctx) return;
+    inst.disconnect();
+    inst.connect(srcNode, ctx.destination, recTap);
   }
 
-  function stageSeq() {
-    var seq = [];
-    if (!bypass.input) seq.push(nodes.inputGain);
-    seq.push(nodes.inAn, nodes.specAn);
-    if (!bypass.gate) seq.push(nodes.gateGain);
-    if (!bypass.feedback) notchList.forEach(function (w) { seq.push(w.node); });
-    if (!bypass.eq) seq.push(nodes.eqLow, nodes.eqMid1, nodes.eqMid2, nodes.eqHigh);
-    if (!bypass.comp) seq.push(nodes.comp);
-    if (!bypass.sat) seq.push(nodes.sat);
-    if (!bypass.limit) seq.push(nodes.limiter);
-    if (!bypass.output) seq.push(nodes.outputGain);
-    seq.push(nodes.outAn);
-    return seq;
-  }
-
-  function rebuildChain() {
-    if (!ctx || !srcNode) return;
-    var all = [nodes.inputGain, nodes.inAn, nodes.specAn, nodes.gateGain,
-               nodes.eqLow, nodes.eqMid1, nodes.eqMid2, nodes.eqHigh,
-               nodes.comp, nodes.sat, nodes.limiter, nodes.outputGain, nodes.outAn];
-    notchList.forEach(function (w) { all.push(w.node); });
-    try { srcNode.disconnect(); } catch (e) {}
-    all.forEach(function (nd) { try { nd.disconnect(); } catch (e) {} });
-    var prev = srcNode;
-    stageSeq().forEach(function (nd) { prev.connect(nd); prev = nd; });
-    nodes.outAn.connect(ctx.destination);
-    nodes.outAn.connect(nodes.recorder); // recording tap persists
-  }
-
+  /* ---------- sources ---------- */
   function stopSource() {
     if (srcNode && srcNode.stop) { try { srcNode.stop(); } catch (e) {} }
     if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
     srcNode = null;
   }
-
   function useMic() {
     return navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -98,11 +62,10 @@
       stopSource();
       micStream = stream;
       srcNode = ctx.createMediaStreamSource(stream);
-      rebuildChain();
+      rebuild();
       $("srcStatus").textContent = "Mic live. Speak or play into your iPhone.";
     });
   }
-
   function useFile(file) {
     return file.arrayBuffer().then(function (buf) {
       return ctx.decodeAudioData(buf);
@@ -113,347 +76,14 @@
       srcNode.buffer = ab;
       srcNode.loop = $("fileLoop").checked;
       srcNode.start();
-      rebuildChain();
+      rebuild();
       $("srcStatus").textContent = "Playing file: " + file.name;
     }).catch(function () {
       $("srcStatus").textContent = "Could not decode that file. Try WAV, MP3, or M4A.";
     });
   }
 
-  /* ---------- parameters ---------- */
-
-  function satCurve(drivePct) {
-    var k = 1 + (drivePct / 100) * 20;
-    var n = 1024, curve = new Float32Array(n), t = Math.tanh(k);
-    for (var i = 0; i < n; i++) {
-      var x = (i / (n - 1)) * 2 - 1;
-      curve[i] = Math.tanh(k * x) / t;
-    }
-    return curve;
-  }
-
-  function bindRange(id, labelId, fmt, apply) {
-    var el = $(id);
-    var run = function () {
-      var v = parseFloat(el.value);
-      $(labelId).textContent = fmt(v);
-      apply(v);
-    };
-    el.addEventListener("input", run);
-    run();
-  }
-
-  function bindAll() {
-    bindRange("inGain", "vInGain", fmtDb, function (v) { nodes.inputGain.gain.value = dbToGain(v); });
-    bindRange("gateT", "vGateT", fmtDb, function (v) { gateThresholdDb = v; });
-    bindRange("eqLowF", "vEqLowF", fmtHz, function (v) { nodes.eqLow.frequency.value = v; });
-    bindRange("eqLowG", "vEqLowG", fmtDb, function (v) { nodes.eqLow.gain.value = v; });
-    bindRange("eqM1F", "vEqM1F", fmtHz, function (v) { nodes.eqMid1.frequency.value = v; });
-    bindRange("eqM1G", "vEqM1G", fmtDb, function (v) { nodes.eqMid1.gain.value = v; });
-    bindRange("eqM1Q", "vEqM1Q", function (v) { return v.toFixed(1); }, function (v) { nodes.eqMid1.Q.value = v; });
-    bindRange("eqM2F", "vEqM2F", fmtHz, function (v) { nodes.eqMid2.frequency.value = v; });
-    bindRange("eqM2G", "vEqM2G", fmtDb, function (v) { nodes.eqMid2.gain.value = v; });
-    bindRange("eqM2Q", "vEqM2Q", function (v) { return v.toFixed(1); }, function (v) { nodes.eqMid2.Q.value = v; });
-    bindRange("eqHF", "vEqHF", fmtHz, function (v) { nodes.eqHigh.frequency.value = v; });
-    bindRange("eqHG", "vEqHG", fmtDb, function (v) { nodes.eqHigh.gain.value = v; });
-    bindRange("compT", "vCompT", fmtDb, function (v) { nodes.comp.threshold.value = v; });
-    bindRange("compR", "vCompR", function (v) { return v.toFixed(1) + " : 1"; }, function (v) { nodes.comp.ratio.value = v; });
-    bindRange("compA", "vCompA", function (v) { return Math.round(v) + " ms"; }, function (v) { nodes.comp.attack.value = v / 1000; });
-    bindRange("compRel", "vCompRel", function (v) { return Math.round(v) + " ms"; }, function (v) { nodes.comp.release.value = v / 1000; });
-    bindRange("satD", "vSatD", function (v) { return Math.round(v) + "%"; }, function (v) { nodes.sat.curve = satCurve(v); });
-    bindRange("limC", "vLimC", fmtDb, function (v) { nodes.limiter.threshold.value = v; });
-    bindRange("outGain", "vOutGain", fmtDb, function (v) { nodes.outputGain.gain.value = dbToGain(v); });
-  }
-
-  /* ---------- presets ---------- */
-
-  var SLIDERS = ["inGain", "gateT", "eqLowF", "eqLowG", "eqM1F", "eqM1G", "eqM1Q",
-                 "eqM2F", "eqM2G", "eqM2Q", "eqHF", "eqHG",
-                 "compT", "compR", "compA", "compRel", "satD", "limC", "outGain"];
-
-  var PRESETS = {
-    clean: { inGain: 0, gateT: -40, eqLowF: 120, eqLowG: 0, eqM1F: 800, eqM1G: 0, eqM1Q: 1,
-             eqM2F: 3000, eqM2G: 0, eqM2Q: 1, eqHF: 8000, eqHG: 0,
-             compT: -18, compR: 2, compA: 10, compRel: 200, satD: 50, limC: -1, outGain: 0,
-             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: true, limit: false, output: false } },
-    vocal: { inGain: 3, gateT: -45, eqLowF: 100, eqLowG: -2, eqM1F: 500, eqM1G: -1, eqM1Q: 1,
-             eqM2F: 3000, eqM2G: 4, eqM2Q: 1.2, eqHF: 9000, eqHG: 1,
-             compT: -20, compR: 4, compA: 3, compRel: 150, satD: 25, limC: -1, outGain: 1,
-             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: false, limit: false, output: false } },
-    tape:  { inGain: 2, gateT: -40, eqLowF: 120, eqLowG: 3, eqM1F: 400, eqM1G: 1, eqM1Q: 0.8,
-             eqM2F: 2500, eqM2G: -1, eqM2Q: 1, eqHF: 8000, eqHG: -3,
-             compT: -14, compR: 2.5, compA: 15, compRel: 300, satD: 65, limC: -1.5, outGain: 0,
-             bypass: { input: false, gate: false, feedback: false, eq: false, comp: false, sat: false, limit: false, output: false } }
-  };
-
-  function refreshBypassButtons() {
-    document.querySelectorAll("[data-bypass]").forEach(function (btn) {
-      var key = btn.getAttribute("data-bypass");
-      var on = !bypass[key];
-      btn.classList.toggle("active", !on);
-      btn.textContent = on ? "Bypass" : "Bypassed";
-    });
-  }
-
-  function applyPreset(name) {
-    var p = PRESETS[name];
-    if (!p) return;
-    SLIDERS.forEach(function (id) {
-      var el = $(id);
-      el.value = p[id];
-      el.dispatchEvent(new Event("input"));
-    });
-    Object.keys(p.bypass).forEach(function (k) { bypass[k] = p.bypass[k]; });
-    refreshBypassButtons();
-    rebuildChain();
-    document.querySelectorAll(".preset").forEach(function (b) {
-      b.classList.toggle("active", b.getAttribute("data-preset") === name);
-    });
-  }
-
-  /* ---------- meters + input analysis ---------- */
-
-  var meterBuf = new Float32Array(2048);
-  function peakDb(an) {
-    an.getFloatTimeDomainData(meterBuf);
-    var peak = 0;
-    for (var i = 0; i < meterBuf.length; i++) {
-      var a = Math.abs(meterBuf[i]);
-      if (a > peak) peak = a;
-    }
-    return peak <= 0.00001 ? -Infinity : 20 * Math.log10(peak);
-  }
-  // peak + rms + dc mean of the input, for clip / floor / dc diagnosis
-  function analyzeInput() {
-    nodes.inAn.getFloatTimeDomainData(meterBuf);
-    var peak = 0, sum = 0, sumSq = 0, n = meterBuf.length;
-    for (var i = 0; i < n; i++) {
-      var s = meterBuf[i], a = Math.abs(s);
-      if (a > peak) peak = a;
-      sum += s; sumSq += s * s;
-    }
-    return { peak: peak, rms: Math.sqrt(sumSq / n), dc: sum / n };
-  }
-  function dbToWidth(db) {
-    if (!isFinite(db)) return 0;
-    return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
-  }
-  function dbText(db) { return isFinite(db) ? db.toFixed(1) + " dB" : "-inf dB"; }
-
-  var specByte = null;
-  function drawSpectrum() {
-    var cv = $("specCanvas");
-    if (!cv) return;
-    var g = cv.getContext("2d");
-    var W = cv.width, H = cv.height;
-    if (!specByte || specByte.length !== nodes.specAn.frequencyBinCount) {
-      specByte = new Uint8Array(nodes.specAn.frequencyBinCount);
-    }
-    nodes.specAn.getByteFrequencyData(specByte);
-    var binHz = ctx.sampleRate / nodes.specAn.fftSize;
-    var minF = 20, maxF = 20000;
-    g.clearRect(0, 0, W, H);
-    for (var x = 0; x < W; x++) {
-      var f = minF * Math.pow(maxF / minF, x / W);
-      var bin = Math.min(Math.floor(f / binHz), specByte.length - 1);
-      var h = (specByte[bin] / 255) * H;
-      g.fillStyle = "#59d6ff";
-      g.fillRect(x, H - h, 1, h);
-    }
-    if (noiseProfile) {
-      g.strokeStyle = "#ff9a3c"; g.lineWidth = 2; g.beginPath();
-      for (var x2 = 0; x2 < W; x2 += 2) {
-        var f2 = minF * Math.pow(maxF / minF, x2 / W);
-        var bin2 = Math.min(Math.floor(f2 / binHz), noiseProfile.length - 1);
-        var db = Math.max(-100, noiseProfile[bin2]);
-        var y = H - ((db + 100) / 100) * H;
-        if (x2 === 0) g.moveTo(x2, y); else g.lineTo(x2, y);
-      }
-      g.stroke();
-    }
-  }
-
-  function meterLoop() {
-    var inp = analyzeInput();
-    var dIn = inp.peak <= 0.00001 ? -Infinity : 20 * Math.log10(inp.peak);
-    var dOut = peakDb(nodes.outAn);
-    var gr = (typeof nodes.comp.reduction === "number") ? -nodes.comp.reduction : 0;
-
-    // gate envelope: fast open, slow close
-    var thr = dbToGain(gateThresholdDb);
-    var target = inp.rms > thr ? 1 : 0;
-    var dt = 1 / 60;
-    var coef = target > gateEnv ? 1 - Math.exp(-dt / 0.005) : 1 - Math.exp(-dt / 0.15);
-    gateEnv += (target - gateEnv) * coef;
-    nodes.gateGain.gain.value = bypass.gate ? 1 : gateEnv;
-
-    // noise floor: slow average of rms
-    var rmsDb = inp.rms <= 0.00001 ? -90 : 20 * Math.log10(inp.rms);
-    floorEnv += (rmsDb - floorEnv) * 0.03;
-    $("noiseFloor").textContent = floorEnv.toFixed(1) + " dB";
-
-    // clip latch + dc indicator
-    if (inp.peak >= 0.999) clipLatched = true;
-    var led = $("clipLed");
-    led.textContent = clipLatched ? "CLIP" : "OK";
-    led.classList.toggle("hot", clipLatched);
-    var dcBad = Math.abs(inp.dc) > 0.02;
-    var dcEl = $("dcLed");
-    dcEl.textContent = dcBad ? "DC!" : "OK";
-    dcEl.classList.toggle("hot", dcBad);
-
-    $("meterIn").style.width = dbToWidth(dIn) + "%";
-    $("meterOut").style.width = dbToWidth(dOut) + "%";
-    $("meterGR").style.width = Math.max(0, Math.min(100, (gr / 24) * 100)) + "%";
-    $("dbIn").textContent = dbText(dIn);
-    $("dbOut").textContent = dbText(dOut);
-    $("dbGR").textContent = gr.toFixed(1) + " dB";
-    drawSpectrum();
-    requestAnimationFrame(meterLoop);
-  }
-
-  /* ---------- noise print: learn the room, suggest the gate ---------- */
-
-  function captureNoisePrint() {
-    var btn = $("noisePrintBtn");
-    btn.disabled = true;
-    $("noisePrintStatus").textContent = "Listening... stay quiet. Learning your room tone.";
-    var frames = [], need = 30; // 30 x 50ms = 1.5s
-    var bins = nodes.specAn.frequencyBinCount;
-    var tmp = new Float32Array(bins);
-    var timer = setInterval(function () {
-      nodes.specAn.getFloatFrequencyData(tmp);
-      var copy = new Float32Array(bins);
-      for (var i = 0; i < bins; i++) copy[i] = tmp[i] < -120 ? -120 : tmp[i];
-      frames.push(copy);
-      if (frames.length >= need) {
-        clearInterval(timer);
-        finishNoisePrint(frames);
-        btn.disabled = false;
-      }
-    }, 50);
-  }
-
-  function finishNoisePrint(frames) {
-    var bins = frames[0].length, f, i;
-    var avg = new Float32Array(bins);
-    for (i = 0; i < bins; i++) {
-      var sum = 0;
-      for (f = 0; f < frames.length; f++) sum += Math.pow(10, frames[f][i] / 10);
-      avg[i] = 10 * Math.log10(sum / frames.length);
-    }
-    noiseProfile = avg;
-    var sorted = Array.prototype.slice.call(avg).sort(function (a, b) { return a - b; });
-    noiseFloorDb = sorted[Math.floor(sorted.length / 2)];
-    var suggested = Math.max(-60, Math.min(0, Math.round(noiseFloorDb + 6)));
-    var el = $("gateT");
-    el.value = suggested;
-    el.dispatchEvent(new Event("input"));
-    $("gateSuggest").textContent =
-      "Suggested from your noise print: " + suggested + " dB (floor " + noiseFloorDb.toFixed(1) + " dB).";
-    $("noisePrintStatus").textContent =
-      "Noise print captured. Orange line on the spectrum is your room. Gate threshold set to " + suggested + " dB.";
-  }
-
-  /* ---------- feedback killer: hunt and notch sustained ringing ---------- */
-
-  function addNotch(freq, auto) {
-    if (notchList.length >= 8) return;
-    for (var i = 0; i < notchList.length; i++) {
-      if (Math.abs(notchList[i].freq - freq) / freq < 0.05) return; // already covered
-    }
-    var f = ctx.createBiquadFilter();
-    f.type = "notch"; f.frequency.value = freq; f.Q.value = 12;
-    notchList.push({ freq: freq, node: f, auto: !!auto });
-    rebuildChain();
-    renderNotches();
-  }
-
-  function removeNotch(i) {
-    var w = notchList[i];
-    try { w.node.disconnect(); } catch (e) {}
-    notchList.splice(i, 1);
-    rebuildChain();
-    renderNotches();
-  }
-
-  function clearNotches() {
-    notchList.forEach(function (w) { try { w.node.disconnect(); } catch (e) {} });
-    notchList.length = 0;
-    rebuildChain();
-    renderNotches();
-  }
-
-  function renderNotches() {
-    var box = $("notchList");
-    box.innerHTML = "";
-    if (notchList.length === 0) {
-      $("huntStatus").textContent = "No notches active.";
-      return;
-    }
-    $("huntStatus").textContent = notchList.length + " notch" +
-      (notchList.length > 1 ? "es" : "") + " active.";
-    notchList.forEach(function (w, i) {
-      var chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = (w.freq >= 1000 ? (w.freq / 1000).toFixed(1) + " kHz" : Math.round(w.freq) + " Hz") + " ";
-      var x = document.createElement("button");
-      x.textContent = "x"; x.className = "chip-x"; x.setAttribute("aria-label", "remove notch");
-      x.addEventListener("click", function () { removeNotch(i); });
-      chip.appendChild(x);
-      box.appendChild(chip);
-    });
-  }
-
-  function huntFeedback() {
-    var btn = $("huntBtn");
-    btn.disabled = true;
-    $("huntStatus").textContent = "Hunting... let the ringing sustain for a second.";
-    var snaps = [], bins = nodes.specAn.frequencyBinCount;
-    function snap(i) {
-      var d = new Float32Array(bins);
-      nodes.specAn.getFloatFrequencyData(d);
-      snaps.push(d);
-      if (i < 2) { setTimeout(function () { snap(i + 1); }, 350); }
-      else { finishHunt(snaps); btn.disabled = false; }
-    }
-    snap(0);
-  }
-
-  function finishHunt(snaps) {
-    var bins = snaps[0].length;
-    var binHz = ctx.sampleRate / nodes.specAn.fftSize;
-    var cands = [], i, j;
-    for (i = 4; i < bins - 4; i++) {
-      var v0 = snaps[0][i] < -120 ? -120 : snaps[0][i];
-      var v1 = snaps[1][i] < -120 ? -120 : snaps[1][i];
-      var v2 = snaps[2][i] < -120 ? -120 : snaps[2][i];
-      var sustained = Math.min(v0, v1, v2);
-      if (sustained < -50) continue; // too quiet to matter
-      var peak = true; // narrow local maximum with contrast
-      for (j = 1; j <= 4; j++) {
-        var a = snaps[0][i - j] < -120 ? -120 : snaps[0][i - j];
-        var b = snaps[0][i + j] < -120 ? -120 : snaps[0][i + j];
-        if (a > v0 - 6 || b > v0 - 6) { peak = false; break; }
-      }
-      if (!peak) continue;
-      cands.push({ bin: i, mag: sustained });
-    }
-    cands.sort(function (a, b) { return b.mag - a.mag; });
-    var picked = [];
-    cands.forEach(function (c) {
-      if (picked.length >= 6) return;
-      if (picked.every(function (p) { return Math.abs(p.bin - c.bin) > 10; })) picked.push(c);
-    });
-    if (picked.length === 0) {
-      $("huntStatus").textContent = "No sustained ringing found. The room is clean, or the tone moved.";
-      return;
-    }
-    picked.forEach(function (c) { addNotch(c.bin * binHz, true); });
-  }
-
-  /* ---------- recording + WAV ---------- */
-
+  /* ---------- recorder + WAV export (16-bit linear PCM, 44-byte RIFF) ---------- */
   function encodeWav(chunksArr, sampleRate) {
     var total = 0, i;
     for (i = 0; i < chunksArr.length; i++) total += chunksArr[i].length;
@@ -473,19 +103,17 @@
     }
     return new Blob([buf], { type: "audio/wav" });
   }
-
   function startRecording() {
     chunks = [];
-    nodes.recorder.port.postMessage({ recording: true });
+    recorderNode.port.postMessage({ recording: true });
     recording = true;
     $("recBtn").disabled = true;
     $("stopBtn").disabled = false;
     $("recStatus").textContent = "Recording the processed output...";
     $("dlLink").classList.add("hidden");
   }
-
   function stopRecording() {
-    nodes.recorder.port.postMessage({ recording: false });
+    recorderNode.port.postMessage({ recording: false });
     recording = false;
     $("recBtn").disabled = false;
     $("stopBtn").disabled = true;
@@ -498,20 +126,45 @@
     $("recStatus").textContent = "Recorded " + secs.toFixed(1) + "s at " + ctx.sampleRate + " Hz. Tap download to save the WAV.";
   }
 
-  /* ---------- boot ---------- */
-
-  function wireUI() {
-    document.querySelectorAll("[data-bypass]").forEach(function (btn) {
-      btn.addEventListener("click", function () {
-        var key = btn.getAttribute("data-bypass");
-        bypass[key] = !bypass[key];
-        refreshBypassButtons();
-        rebuildChain();
+  /* ---------- shell UI ---------- */
+  function renderSuitePicker() {
+    var box = $("suitePicker");
+    box.innerHTML = "";
+    FIFSuites.list().forEach(function (s) {
+      var b = document.createElement("button");
+      b.className = "suite-pick" + (s.id === pickedSuiteId ? " active" : "");
+      var h = document.createElement("div");
+      h.className = "suite-pick-name";
+      h.textContent = s.name;
+      var p = document.createElement("div");
+      p.className = "suite-pick-desc";
+      p.textContent = s.description;
+      var meta = document.createElement("div");
+      meta.className = "suite-pick-meta";
+      meta.textContent = s.stages.length + " stages. Patent ledger: " + s.patents;
+      b.appendChild(h); b.appendChild(p); b.appendChild(meta);
+      b.addEventListener("click", function () {
+        pickedSuiteId = s.id;
+        renderSuitePicker();
       });
+      box.appendChild(b);
     });
-    document.querySelectorAll(".preset").forEach(function (b) {
-      b.addEventListener("click", function () { applyPreset(b.getAttribute("data-preset")); });
+  }
+
+  function renderPresets() {
+    var row = $("presetRow");
+    row.innerHTML = "";
+    inst.presets().forEach(function (p) {
+      var b = document.createElement("button");
+      b.className = "preset";
+      b.setAttribute("data-preset", p.id);
+      b.textContent = p.label;
+      b.addEventListener("click", function () { inst.applyPreset(p.id); });
+      row.appendChild(b);
     });
+  }
+
+  function wireShellUI() {
     $("srcMic").addEventListener("click", function () {
       $("srcMic").classList.add("active"); $("srcFile").classList.remove("active");
       useMic().catch(function () {
@@ -520,8 +173,6 @@
       });
     });
     $("srcFile").addEventListener("click", function () {
-      $("srcMic").classList.add("active"); $("srcFile").classList.remove("active");
-      // keep mic active until a file is chosen; button just highlights the file path
       $("srcMic").classList.remove("active"); $("srcFile").classList.add("active");
       $("fileInput").click();
     });
@@ -533,21 +184,27 @@
     });
     $("recBtn").addEventListener("click", startRecording);
     $("stopBtn").addEventListener("click", stopRecording);
-    $("clipLed").addEventListener("click", function () { clipLatched = false; });
-    $("noisePrintBtn").addEventListener("click", captureNoisePrint);
-    $("huntBtn").addEventListener("click", huntFeedback);
-    $("notchAdd").addEventListener("click", function () {
-      addNotch(parseFloat($("notchF").value), false);
-    });
-    $("notchClear").addEventListener("click", clearNotches);
-    $("notchF").addEventListener("input", function () {
-      $("vNotchF").textContent = fmtHz(parseFloat($("notchF").value));
-    });
-    renderNotches();
-    refreshBypassButtons();
   }
 
+  function meterLoop() {
+    var m = inst.tick();
+    $("meterIn").style.width = dbToWidth(m.dIn) + "%";
+    $("meterOut").style.width = dbToWidth(m.dOut) + "%";
+    $("meterGR").style.width = Math.max(0, Math.min(100, (m.gr / 24) * 100)) + "%";
+    $("dbIn").textContent = dbText(m.dIn);
+    $("dbOut").textContent = dbText(m.dOut);
+    $("dbGR").textContent = m.gr.toFixed(1) + " dB";
+    requestAnimationFrame(meterLoop);
+  }
+
+  /* ---------- boot ---------- */
   function boot() {
+    if (FIFSuites.list().length === 0) {
+      $("startOverlay").querySelector("p").textContent = "No suites registered.";
+      return;
+    }
+    pickedSuiteId = FIFSuites.list()[0].id;
+    renderSuitePicker();
     $("startBtn").addEventListener("click", function () {
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) {
@@ -556,27 +213,48 @@
         return;
       }
       ctx = new AC({ latencyHint: "interactive" });
+      shell.ctx = ctx;
       ctx.resume().then(function () {
         return ctx.audioWorklet.addModule("recorder-worklet.js");
       }).then(function () {
-        makeNodes();
-        bindAll();
-        wireUI();
+        // recorder tap lives in the shell; suites connect their output to it
+        recTap = ctx.createGain();
+        recorderNode = new AudioWorkletNode(ctx, "fif-recorder");
+        recorderNode.port.onmessage = function (e) {
+          if (e.data && e.data.samples) chunks.push(new Float32Array(e.data.samples));
+        };
+        var mute = ctx.createGain(); mute.gain.value = 0;
+        recTap.connect(recorderNode);
+        recorderNode.connect(mute);
+        mute.connect(ctx.destination);
+        // boot the picked suite
+        suiteDef = FIFSuites.get(pickedSuiteId);
+        $("suiteCards").innerHTML = suiteDef.cardsHTML;
+        inst = suiteDef.create(shell);
+        inst.build();
+        inst.bind();
+        renderPresets();
+        wireShellUI();
         return useMic();
       }).then(function () {
         $("startOverlay").classList.add("hidden");
         $("app").classList.remove("hidden");
         meterLoop();
       }).catch(function () {
-        // Mic denied: still boot with file source available.
-        if (!ctx) return;
-        makeNodes(); bindAll(); wireUI();
+        if (!ctx || !inst) {
+          $("startOverlay").querySelector("p").textContent =
+            "Audio failed to start in this browser. Try Safari or Chrome.";
+          return;
+        }
         $("startOverlay").classList.add("hidden");
         $("app").classList.remove("hidden");
         $("srcStatus").textContent = "Mic unavailable. Upload an audio file to process it.";
         $("srcMic").classList.remove("active"); $("srcFile").classList.add("active");
         meterLoop();
       });
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && ctx && ctx.state === "suspended") ctx.resume();
     });
   }
 

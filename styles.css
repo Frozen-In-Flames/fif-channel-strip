@@ -119,3 +119,14 @@ input[type="range"] { width: 100%; accent-color: var(--ice); height: 28px; }
 .overlay-card .big-btn { margin: 12px 0; width: 100%; }
 
 footer { text-align: center; color: var(--dim); font-size: 12px; padding: 16px 8px; }
+
+.suite-picker { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.suite-pick {
+  background: #121722; border: 1px solid #2a3348; border-radius: 10px;
+  color: var(--text); text-align: left; padding: 10px 12px; cursor: pointer;
+  font: inherit;
+}
+.suite-pick.active { border-color: var(--fire); }
+.suite-pick-name { font-weight: 700; font-size: 15px; }
+.suite-pick-desc { font-size: 13px; color: var(--dim); margin-top: 4px; }
+.suite-pick-meta { font-size: 12px; color: var(--dim); margin-top: 6px; }
