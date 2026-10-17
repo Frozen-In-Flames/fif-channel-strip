@@ -24,7 +24,7 @@
   var srcNode = null;
   var micStream = null;
   var fileBuffer = null;
-  var recTap = null;
+  var msDest = null;      // MediaStreamAudioDestinationNode: taps the PROCESSED chain end
   var recorderNode = null;
   var chunks = [];
   var recording = false;
@@ -46,7 +46,9 @@
   function rebuild() {
     if (!inst || !ctx) return;
     inst.disconnect();
-    inst.connect(srcNode, ctx.destination, recTap);
+    // recTap is the MediaStream destination: the recorder captures the
+    // processed chain output, never the raw mic.
+    inst.connect(srcNode, ctx.destination, msDest);
   }
 
   /* ---------- sources ---------- */
@@ -217,14 +219,17 @@
       ctx.resume().then(function () {
         return ctx.audioWorklet.addModule("recorder-worklet.js");
       }).then(function () {
-        // recorder tap lives in the shell; suites connect their output to it
-        recTap = ctx.createGain();
+        // Recorder: the processed chain end feeds a MediaStreamDestination;
+        // the recorder worklet samples THAT stream, so the WAV contains all
+        // stages, never the raw mic.
+        msDest = ctx.createMediaStreamDestination();
+        var msSrc = ctx.createMediaStreamSource(msDest.stream);
         recorderNode = new AudioWorkletNode(ctx, "fif-recorder");
         recorderNode.port.onmessage = function (e) {
           if (e.data && e.data.samples) chunks.push(new Float32Array(e.data.samples));
         };
         var mute = ctx.createGain(); mute.gain.value = 0;
-        recTap.connect(recorderNode);
+        msSrc.connect(recorderNode);
         recorderNode.connect(mute);
         mute.connect(ctx.destination);
         // boot the picked suite

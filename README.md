@@ -48,7 +48,7 @@ Tap Record to capture the processed output. When you stop, the app encodes a 16-
 - **Cheap mic harshness**: the limiter tames exaggerated transient peaks, Mic Fix corrects the capsule resonance, the de-esser controls sibilance, the exciter restores harmonic life, and the EQ shapes the rest.
 - **Room resonances**: the room scanner finds narrow modal peaks below 300 Hz and notches them; hum notches kill mains buzz.
 - **Not knowing what is wrong**: the analyzer shows the 64-band spectrum, true peak, noise floor, clipping, and DC offset live, so every treatment decision is based on measured signal.
-- **iOS constraints**: audio starts on an explicit tap (iOS requires a user gesture), the context resumes after calls and app switches, the silent-switch behavior is documented in the app, and the heavy STFT work sits behind a toggle so the native chain de-risks older phones.
+- **iOS constraints**: audio starts on an explicit tap (iOS requires a user gesture), the context resumes after calls and app switches, the silent-switch behavior is documented in the app, and the heavy STFT work sits behind a toggle (iOS mandates a 128-sample render quantum; glitching with heavy worklet DSP at that size is reported) so the native chain de-risks older phones.
 
 ## Patents
 

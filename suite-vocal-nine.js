@@ -590,7 +590,9 @@ FIFSuites.register({
       var dIn = inp.peak <= 0.00001 ? -Infinity : 20 * Math.log10(inp.peak);
       var dOut = peakDb(nodes.outAn);
       var gr = (typeof nodes.comp.reduction === "number") ? -nodes.comp.reduction : 0;
-      // downward expander, smooth logarithmic envelope; threshold from the noise print
+      // Downward expander, dbx-style (US3989897): RMS detector, gain law applied
+      // in the logarithmic (dB) domain, smooth attack/release envelope so the
+      // gain never steps (no clicking). Threshold from the noise print.
       var levelDb = inp.rms <= 0.00001 ? -90 : 20 * Math.log10(inp.rms);
       var gratio = parseFloat($("gateR").value);
       var targetDb = levelDb >= gateThresholdDb ? 0 : -(gateThresholdDb - levelDb) * (1 - 1 / gratio);
@@ -638,13 +640,19 @@ FIFSuites.register({
       }, 50);
     }
     function finishNoisePrint(frames) {
+      // Boll (US4185168): spectral magnitude averaging. Novatel (US5432859A):
+      // per-bin noise profile via exponential averaging over the silence sample.
       var bins = frames[0].length, f, i;
-      var avg = new Float32Array(bins);
-      for (i = 0; i < bins; i++) {
-        var sum = 0;
-        for (f = 0; f < frames.length; f++) sum += Math.pow(10, frames[f][i] / 10);
-        avg[i] = 10 * Math.log10(sum / frames.length);
+      var avgMag = new Float32Array(bins); // linear magnitudes, exponentially averaged
+      for (f = 0; f < frames.length; f++) {
+        var fr = frames[f], k = f === 0 ? 1 : 0.15;
+        for (i = 0; i < bins; i++) {
+          var mag = Math.pow(10, fr[i] / 20);
+          avgMag[i] = f === 0 ? mag : avgMag[i] + k * (mag - avgMag[i]);
+        }
       }
+      var avg = new Float32Array(bins);
+      for (i = 0; i < bins; i++) avg[i] = 20 * Math.log10(avgMag[i] + 1e-12);
       noiseProfile = avg;
       var sorted = Array.prototype.slice.call(avg).sort(function (a, b) { return a - b; });
       noiseFloorDb = sorted[Math.floor(sorted.length / 2)];
@@ -660,10 +668,43 @@ FIFSuites.register({
     }
 
     /* ---------- feedback killer ---------- */
-    function addNotch(freq, auto) {
-      if (notchList.length >= 8) return;
+    // Live steering: when the detector fires, an existing auto notch near the
+    // frequency is retuned in place; the pool recycles the oldest auto notch
+    // when full (dbx-style dynamic filters). The filter frequency always
+    // follows the detector.
+    function steerNotch(freq) {
       for (var i = 0; i < notchList.length; i++) {
-        if (Math.abs(notchList[i].freq - freq) / freq < 0.05) return;
+        var w = notchList[i];
+        if (w.auto && Math.abs(w.freq - freq) / freq < 0.08) {
+          w.freq = freq;
+          w.node.frequency.setTargetAtTime(freq, ctx.currentTime, 0.03);
+          S.rebuild();
+          renderNotches();
+          return true;
+        }
+      }
+      return false;
+    }
+    function addNotch(freq, auto) {
+      if (notchList.length >= 8) {
+        for (var r = 0; r < notchList.length; r++) {
+          if (notchList[r].auto) {
+            var old = notchList.splice(r, 1)[0];
+            old.freq = freq;
+            old.node.frequency.setTargetAtTime(freq, ctx.currentTime, 0.03);
+            notchList.push(old); // recycled: back of the queue
+            S.rebuild();
+            renderNotches();
+            return;
+          }
+        }
+        return; // pool full of manual notches: leave them alone
+      }
+      for (var i = 0; i < notchList.length; i++) {
+        if (Math.abs(notchList[i].freq - freq) / freq < 0.05) {
+          steerNotch(freq); // already covered: retune it to the fresh detection
+          return;
+        }
       }
       var flt = ctx.createBiquadFilter();
       flt.type = "notch"; flt.frequency.value = freq; flt.Q.value = 12;
@@ -747,7 +788,9 @@ FIFSuites.register({
         $("huntStatus").textContent = "No sustained ringing found. The room is clean, or the tone moved.";
         return;
       }
-      picked.forEach(function (c) { addNotch(c.bin * binHz, true); });
+      picked.forEach(function (c) {
+        if (!steerNotch(c.bin * binHz)) addNotch(c.bin * binHz, true);
+      });
     }
     // Room-mode scan: cut narrow modal peaks below 300 Hz (narrower than
     // ~1/3 octave; peaks below 100 Hz always cut). Never boost nulls.
@@ -791,7 +834,7 @@ FIFSuites.register({
       var added = 0;
       cands.forEach(function (c) {
         if (added >= 4 || notchList.length >= 8) return;
-        addNotch(c.freq, true);
+        if (!steerNotch(c.freq)) addNotch(c.freq, true);
         added++;
       });
       $("huntStatus").textContent = added > 0 ?

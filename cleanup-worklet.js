@@ -13,7 +13,10 @@
  *
  * N=1024, hop=256 (75% overlap), sqrt-Hann analysis and synthesis windows
  * (product sums to 1.5, normalized on emit). Toggle-gated by the app:
- * heavy by design, so it stays off until the user enables it.
+ * heavy by design, so it stays off until the user enables it. The toggle
+ * exists because iOS Safari mandates a 128-sample render quantum and glitching
+ * with heavy worklet DSP at that size has been reported; the native-node chain
+ * runs fine without this stage.
  */
 class FIFCleanup extends AudioWorkletProcessor {
   constructor() {
