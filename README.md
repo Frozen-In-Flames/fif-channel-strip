@@ -59,10 +59,6 @@ Every stage cites its sources in [PATENTS.md](PATENTS.md), the Vocal Nine patent
 - v0.2: multiband dynamics, offline faster-than-real-time render, adaptive noise profiling.
 - Research in progress: mic correction profiles from first principles, each integrated as a build stage when verified. New chains ship as new registry suites.
 
-## Not affiliated with Focusrite
-
-This project is not affiliated with, sponsored by, or endorsed by Focusrite. It takes no names, product names, or visual identity from Focusrite or its brands. Similar functionality, original identity.
-
 ## License
 
 Apache-2.0. See LICENSE.
