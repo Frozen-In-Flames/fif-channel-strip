@@ -3,19 +3,17 @@
 FIFSuites.register({
   id: "vocal-nine",
   name: "Vocal Nine",
-  description: "The 9-stage vocal chain for phone and cheap mics in untreated rooms: analyze, noise print, expander, feedback killer, cleanup, mic fix, de-esser, exciter, dynamics, plus optional studio spectral cleanup and WAV export.",
+  description: "The 9-stage vocal chain for phone and cheap mics in untreated rooms: analyze, expander, feedback killer, cleanup, mic fix, de-esser, exciter, dynamics, plus optional studio spectral cleanup and WAV export.",
   stages: [
-    "Analyze: 64-band spectrum, true-peak, clip/DC",
-    "Noise Print: room tone profile",
+    "Analyze: 64-band spectrum, true-peak, clip/DC, noise print room profile",
     "Expander: downward expander, print-derived threshold",
-    "Feedback Killer: Sabine detection, notch pool, room scan",
-    "Cleanup: HPF + hum notches",
-    "Mic Fix: iPhone transducer correction + corrective EQ",
-    "De-esser: 6.8 kHz split-band",
+    "Feedback Killer: ringing detection, notch pool, room scan",
+    "Cleanup: steep HPF + 50/60 Hz hum notches",
+    "Mic Fix: phone transducer correction + corrective EQ",
+    "De-esser: split-band sibilance control",
     "Exciter: asymmetric harmonic synthesis",
-    "Dynamics: compressor, tanh saturation, 1 ms brickwall limiter",
-    "Studio Cleanup (toggle): spectral NR, dereverb, transient shaper",
-    "Export: 16-bit WAV, canonical 44-byte RIFF"
+    "Dynamics: compressor, tanh saturation, brickwall limiter",
+    "Studio Cleanup (toggle): spectral NR, dereverb, transient shaper"
   ],
   patents: "PATENTS.md",
   cardsHTML: `
@@ -23,9 +21,11 @@ FIFSuites.register({
   <section class="card">
     <h2>Analyze</h2>
     <canvas id="specCanvas" width="520" height="140" class="spec"></canvas>
+    <p class="status">Spectrum: live input, 20 Hz to 20 kHz. After a noise print capture, the orange line is your room tone.</p>
     <canvas id="bandCanvas" width="520" height="64" class="spec"></canvas>
+    <p class="status">64-band: energy per band. Drives the analyzer and the de-esser target.</p>
     <div class="row diag-row">
-      <span>Noise floor <b id="noiseFloor">--</b></span>
+      <span>Live floor <b id="noiseFloor" title="Running estimate of the input noise floor">--</b></span>
       <span>Peak <b id="truePeak">--</b></span>
       <span>Clip <button id="clipLed" class="led" title="Tap to clear">OK</button></span>
       <span>DC <b id="dcLed" class="led">OK</b></span>
