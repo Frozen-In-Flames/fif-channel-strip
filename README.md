@@ -1,8 +1,10 @@
 # Frozen In Flames Channel Strip
 
-A virtual recording channel strip that runs entirely in your browser. Pick a chain on the startup screen, point it at your iPhone microphone or drop in an audio file, shape it through full DSP, watch the meters, and record the result as a WAV. No hardware, no server, no account.
+A recording channel strip implemented with the Web Audio API and running entirely in the browser: a selectable processing chain is applied to a live microphone input or an uploaded audio file, with metering throughout and the processed result recorded as WAV. No dedicated hardware, no server, and no account are required.
 
-Live demo: https://frozen-in-flames.github.io/fif-channel-strip/
+## Live demonstration
+
+- [Channel Strip](https://frozen-in-flames.github.io/fif-channel-strip/): the full application, running in the browser.
 
 ## Product line, not a one-off
 
