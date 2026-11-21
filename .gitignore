@@ -1,0 +1,13 @@
+# Dependencies (the app itself has none; this covers local tooling)
+node_modules/
+
+# Build and test output
+dist/
+coverage/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

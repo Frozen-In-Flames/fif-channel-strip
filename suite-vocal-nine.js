@@ -267,7 +267,12 @@ FIFSuites.register({
       n.studio = null; // fif-cleanup worklet node, created when toggled on
     }
 
+    /* Waveshaper curves come from dsp-math.js (FIFDspMath), the pure module
+     * the offline Node tests exercise, so the tested math is the shipped
+     * math. The inline fallbacks keep the suite working if that script is
+     * ever missing from the page. */
     function exciterCurve() {
+      if (typeof FIFDspMath !== "undefined") return FIFDspMath.buildExciterCurve(1024);
       var len = 1024, curve = new Float32Array(len);
       for (var i = 0; i < len; i++) {
         var x = (i / (len - 1)) * 2 - 1;
@@ -278,6 +283,7 @@ FIFSuites.register({
     }
 
     function satCurve(drivePct) {
+      if (typeof FIFDspMath !== "undefined") return FIFDspMath.buildSatCurve(drivePct, 1024);
       var k = 1 + (drivePct / 100) * 20;
       var len = 1024, curve = new Float32Array(len), t = Math.tanh(k);
       for (var i = 0; i < len; i++) {
@@ -364,9 +370,15 @@ FIFSuites.register({
       bindRange("gateR", "vGateR", function (v) { return v.toFixed(1) + " : 1"; }, function () {});
       bindRange("hpfF", "vHpfF", fmtHz, function (v) { nodes.hpf.frequency.value = v; });
       bindRange("micAmt", "vMicAmt", function (v) { return Math.round(v) + "%"; }, function (v) {
-        var a = v / 100;
-        nodes.micCut.gain.value = -6 * a;
-        nodes.micBody.gain.value = 3 * a;
+        if (typeof FIFDspMath !== "undefined") {
+          var g = FIFDspMath.micFixGains(v);
+          nodes.micCut.gain.value = g.cutDb;
+          nodes.micBody.gain.value = g.bodyDb;
+        } else {
+          var a = v / 100;
+          nodes.micCut.gain.value = -6 * a;
+          nodes.micBody.gain.value = 3 * a;
+        }
       });
       bindRange("eqLowF", "vEqLowF", fmtHz, function (v) { nodes.eqLow.frequency.value = v; });
       bindRange("eqLowG", "vEqLowG", fmtDb, function (v) { nodes.eqLow.gain.value = v; });
@@ -595,10 +607,15 @@ FIFSuites.register({
       // gain never steps (no clicking). Threshold from the noise print.
       var levelDb = inp.rms <= 0.00001 ? -90 : 20 * Math.log10(inp.rms);
       var gratio = parseFloat($("gateR").value);
-      var targetDb = levelDb >= gateThresholdDb ? 0 : -(gateThresholdDb - levelDb) * (1 - 1 / gratio);
       var dt = 1 / 60;
-      var coef = targetDb > gateEnvDb ? 1 - Math.exp(-dt / 0.005) : 1 - Math.exp(-dt / 0.15);
-      gateEnvDb += (targetDb - gateEnvDb) * coef;
+      if (typeof FIFDspMath !== "undefined") {
+        var targetDbM = FIFDspMath.expanderTargetDb(levelDb, gateThresholdDb, gratio);
+        gateEnvDb = FIFDspMath.expanderEnvelopeStep(gateEnvDb, targetDbM, dt);
+      } else {
+        var targetDb = levelDb >= gateThresholdDb ? 0 : -(gateThresholdDb - levelDb) * (1 - 1 / gratio);
+        var coef = targetDb > gateEnvDb ? 1 - Math.exp(-dt / 0.005) : 1 - Math.exp(-dt / 0.15);
+        gateEnvDb += (targetDb - gateEnvDb) * coef;
+      }
       nodes.gateGain.gain.value = bypass.gate ? 1 : dbToGain(gateEnvDb);
       var rmsDb = inp.rms <= 0.00001 ? -90 : 20 * Math.log10(inp.rms);
       floorEnv += (rmsDb - floorEnv) * 0.03;

@@ -52,6 +52,22 @@ Tap Record to capture the processed output. When you stop, the app encodes a 16-
 - **Not knowing what is wrong**: the analyzer shows the 64-band spectrum, true peak, noise floor, clipping, and DC offset live, so every treatment decision is based on measured signal.
 - **iOS constraints**: audio starts on an explicit tap (iOS requires a user gesture), the context resumes after calls and app switches, the silent-switch behavior is documented in the app, and the heavy STFT work sits behind a toggle (iOS mandates a 128-sample render quantum; glitching with heavy worklet DSP at that size is reported) so the native chain de-risks older phones.
 
+## Tests
+
+Offline tests run in Node with no dependencies:
+
+```
+npm test
+```
+
+The suite covers two things. First, the pure DSP math in `dsp-math.js` (the waveshaper curves, the expander gain law and envelope, the Mic Fix gains, and the limiter ceiling), exercised against generated fixtures: a sine burst and an impulse must come through non-silent and within the ceiling, and silence must stay silent. The Vocal Nine suite delegates to that module for its curves and gain law, so the tested math is the shipped math. Second, the suite definition itself: the nine stages in order, every control default inside its slider range, and total positive gain staging at rest within a stated bound.
+
+What the tests do not cover is live rendering. Biquad filtering, the browser dynamics nodes, the worklet stages, and metering need a real AudioContext in a browser, and no offline result here claims otherwise. CI runs the offline suite on every push to `main`.
+
+## Shared processing conventions
+
+Vocal Nine follows the same stage order philosophy and gain staging conventions as the other Frozen In Flames processing layers, the plugin and the Studio mixer. The convention, and its limits, are documented in [docs/vocal-nine-sharing.md](docs/vocal-nine-sharing.md).
+
 ## Patents
 
 Every stage cites its sources in [PATENTS.md](PATENTS.md), the Vocal Nine patent ledger. The two highest-value methods (Sabine feedback detection, Novatel noise-print spectral reduction) are confirmed expired and implemented directly; still-active patents are learn-only and re-implemented originally.

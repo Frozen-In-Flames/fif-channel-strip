@@ -1,0 +1,10 @@
+{
+  "description": "Frozen In Flames Channel Strip: a Web Audio recording channel strip that runs entirely in the browser.",
+  "license": "Apache-2.0",
+  "name": "fif-channel-strip",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/dsp-math.test.js tests/suite-integrity.test.js"
+  },
+  "version": "0.1.0"
+}
